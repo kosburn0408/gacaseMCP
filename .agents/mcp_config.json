@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "gacaseMCP": {
+      "command": "python3",
+      "args": [
+        "-m",
+        "gacaseMCP.main"
+      ],
+      "env": {
+        "PYTHONPATH": "."
+      }
+    }
+  }
+}
