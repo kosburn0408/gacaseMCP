@@ -1,127 +1,67 @@
 # gacaseMCP User Guide
 
-Welcome to the **gacaseMCP** User Guide. This guide provides step-by-step instructions on installing, configuring, running, and interacting with the Model Context Protocol (MCP) server for the Georgia Department of Education (GaDOE) SuitCASE API (`https://case.georgiastandards.org/ims/case/v1p1/`).
-
----
-
-## 📋 Table of Contents
-1. [Overview](#overview)
-2. [Prerequisites & System Requirements](#prerequisites--system-requirements)
-3. [Installation](#installation)
-4. [Running the MCP Server](#running-the-mcp-server)
-   - [Method A: Python Module Execution](#method-a-python-module-execution)
-   - [Method B: FastMCP CLI](#method-b-fastmcp-cli)
-   - [Method C: Antigravity CLI Integration](#method-c-antigravity-cli-integration)
-   - [Method D: Claude Desktop / MCP Host Client](#method-d-claude-desktop--mcp-host-client)
-5. [Tool Reference & Usage Examples](#tool-reference--usage-examples)
-   - [1. get_framework_packages](#1-get_framework_packages)
-   - [2. get_framework_by_id](#2-get_framework_by_id)
-   - [3. get_courses_and_pathways](#3-get_courses_and_pathways)
-   - [4. search_standards](#4-search_standards)
-6. [Troubleshooting & FAQ](#troubleshooting--faq)
+## 📋 Contents
+1. [Overview](#ℹ️-overview)
+2. [Installation](#️-installation)
+3. [Running the server](#-running-the-server)
+4. [How to use the tools](#-how-to-use-the-tools)
+5. [Tool reference](#️-tool-reference)
+6. [Configuration](#-configuration)
+7. [Troubleshooting](#-troubleshooting)
 
 ---
 
 ## ℹ️ Overview
 
-**gacaseMCP** connects AI assistants (such as Antigravity, Claude, or custom LLM agents) to Georgia's official SuitCASE (State Standards Framework) repository using the 1.1 CASE open specification.
+**gacaseMCP** connects AI assistants (Claude, Antigravity, Hermes or custom agents) to Georgia's SuitCASE repository, which publishes Georgia's frameworks in the 1EdTech CASE® 1.1 format. The frameworks include:
+- **Subject standards:** the current K–12 English Language Arts and Mathematics standards, Science, Social Studies, Computer Science, Fine Arts, World Languages, Health, PE, and the Georgia Early Learning and Development Standards.
+- **CTAE career clusters,** with courses and their content standards.
+- **Course codes and titles,** in GaDOE's `NN.NNNNN` format, e.g. `11.41500`, plus the State-Funded List of K–8 Subjects and 9–12 Courses.
+- **Other frameworks,** such as high-demand career lists and educator performance standards (TAPS, LAPS).
 
-With `gacaseMCP`, AI models can automatically retrieve and analyze:
-- **Georgia Standards of Excellence (GSE)** for Computer Science, Math, Science, ELA, Fine Arts, Social Studies, World Languages, etc.
-- **CTAE Career Clusters & Pathways** (Digital Technology, Cybersecurity, Engineering, Healthcare, Business, Agriculture, etc.).
-- **Official Course Codes & Titles** (following standard GaDOE course code formats like `11.41500`, `01.01210`).
-- **State-Funded K-8 Subjects & 9-12 Courses**.
+Georgia keeps retired frameworks in the repository. Each framework's **adoption status** (*Adopted*, *Draft* or *Deprecated*) is shown, and Deprecated frameworks are hidden unless you ask for them.
 
----
-
-## 💻 Prerequisites & System Requirements
-
-- **Python**: Version 3.10 or higher (Python 3.11+ recommended).
-- **Dependencies**:
-  - `mcp[cli]` (FastMCP server runtime)
-  - `httpx` (Asynchronous HTTP client)
-  - `pydantic` (Data validation)
+This is an independent project that reads the public SuitCASE API; it is not an official GaDOE service.
 
 ---
 
 ## ⚙️ Installation
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/kosburn0408/gacaseMCP.git
-   cd gacaseMCP
-   ```
+Requires Python 3.10+.
 
-2. **Create and activate a virtual environment:**
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate
-   ```
+```bash
+git clone https://github.com/kosburn0408/gacaseMCP.git
+cd gacaseMCP
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+```
 
-3. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+`requirements.txt` pins `mcp` below 2.0, because the server uses `FastMCP`, which MCP 2.x removed.
 
 ---
 
-## 🚀 Running the MCP Server
+## 🚀 Running the server
 
-### Method A: Python Module Execution
-To run the MCP server directly via standard Python stdio transport:
+**Python (stdio):**
 ```bash
-python -m gacaseMCP.main
+python -m gacaseMCP.main      # or: python main.py
 ```
-Or from the root directory:
+
+**MCP Inspector** (browser UI to try tools; included with `mcp[cli]`):
 ```bash
-python main.py
+mcp dev main.py
 ```
 
-### Method B: FastMCP CLI
-If `mcp[cli]` is installed, you can use `fastmcp`:
-```bash
-fastmcp run main.py
-```
-To inspect tool schemas and launch an interactive inspector interface in your browser:
-```bash
-fastmcp dev main.py
-```
+**Antigravity CLI:** `.agents/mcp_config.json` is discovered automatically; check with `/mcp`.
 
-### Method C: Antigravity CLI Integration
-This workspace includes a `.agents/mcp_config.json` configuration file. When working inside Antigravity CLI (`agy-cli`), the server is auto-discovered:
-```json
-{
-  "mcpServers": {
-    "gacaseMCP": {
-      "command": "python3",
-      "args": [
-        "-m",
-        "gacaseMCP.main"
-      ],
-      "env": {
-        "PYTHONPATH": "."
-      }
-    }
-  }
-}
-```
-You can invoke tools directly from your prompts or verify connection via `/mcp` inside `agy-cli`.
-
-### Method D: Claude Desktop / MCP Host Client
-Add the following snippet to your `claude_desktop_config.json` (located at `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
-
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
 ```json
 {
   "mcpServers": {
     "gacaseMCP": {
       "command": "/path/to/gacaseMCP/.venv/bin/python",
-      "args": [
-        "-m",
-        "gacaseMCP.main"
-      ],
-      "env": {
-        "PYTHONPATH": "/path/to/gacaseMCP"
-      }
+      "args": ["-m", "gacaseMCP.main"],
+      "env": { "PYTHONPATH": "/path/to/gacaseMCP" }
     }
   }
 }
@@ -129,180 +69,109 @@ Add the following snippet to your `claude_desktop_config.json` (located at `~/Li
 
 ---
 
-## 🛠️ Tool Reference & Usage Examples
+## 🧭 How to use the tools
 
-### 1. `get_framework_packages`
-Lists or searches framework documents registered on Georgia SuitCASE.
+Frameworks can hold thousands of items, so the tools are built to be used in steps:
 
-- **Parameters:**
-  - `query` *(optional str)*: Keyword to filter document titles or descriptions (e.g. `'Computer Science'`, `'CTAE'`).
-  - `framework_type` *(optional str)*: Filter by framework category (e.g. `'Standards'`, `'CourseCodes'`, `'High Demand Career List Regions'`).
+1. **Find the framework.**
+   `get_framework_packages(query="Language Arts")` returns titles, identifiers and adoption status. Use an **Adopted** one.
+2. **See its shape.**
+   `get_framework_by_id(framework_uuid)` returns item counts by type and grade, plus the top-level items (e.g. `K.F Foundations`).
+3. **Then either walk the tree or search.**
+   - Walk down: `get_children(framework_uuid, "K.F")` → `get_children(framework_uuid, "K.F.P")` → `get_item(framework_uuid, "K.F.P.2")`
+   - Or search: `search_standards(framework_uuid, "decode silent e", education_level="1")`
+4. **Follow relationships.**
+   `get_item` shows an item's breadcrumb, its children, and crosswalks to other frameworks. `get_associations` lists them all, filtered by type.
 
-- **Example Call:**
-  ```python
-  await get_framework_packages(query="Computer Science", framework_type="Standards")
-  ```
-
-- **Sample Output:**
-  ```json
-  {
-    "total_packages": 2,
-    "query": "Computer Science",
-    "framework_type": "Standards",
-    "packages": [
-      {
-        "identifier": "00fcf0e2-b9c3-11e7-a4ad-47f36833e889",
-        "title": "Computer Science - Georgia Standards of Excellence",
-        "framework_type": "Standards",
-        "creator": "Georgia Department of Education",
-        "publisher": "Georgia Department of Education",
-        "last_change_date_time": "2025-06-30T23:05:56+00:00",
-        "case_version": "1.1",
-        "description": "The Georgia Standards of Excellence (GSE) for Computer Science...",
-        "uri": "https://case.georgiastandards.org/ims/case/v1p1/CFDocuments/00fcf0e2-b9c3-11e7-a4ad-47f36833e889",
-        "package_uri": "https://case.georgiastandards.org/ims/case/v1p1/CFPackages/00fcf0e2-b9c3-11e7-a4ad-47f36833e889"
-      }
-    ]
-  }
-  ```
+Lists return `total`, `offset`, `limit` and `next_offset`; pass `offset=next_offset` for the next page.
 
 ---
 
-### 2. `get_framework_by_id`
-Retrieves a complete framework bundle by its UUID.
+## 🛠️ Tool reference
 
-- **Parameters:**
-  - `framework_uuid` *(str, required)*: UUID string of target framework.
+### `get_framework_packages(query=None, framework_type=None, include_deprecated=False)`
+Lists frameworks.
+- **query** matches the title, description, notes, subject and type.
+- **framework_type** is a partial match on Georgia's types: `Standards`, `CourseCodes`, `Credential List`, `Resource Collection`, `High Demand Career List Regions`. Some frameworks have no type and won't match a type filter.
+- Each result includes `identifier`, `title`, `adoption_status`, `framework_type`, `subject`, dates, `uri` and `package_uri`.
+- `deprecated_hidden` reports how many retired frameworks were left out.
 
-- **Example Call:**
-  ```python
-  await get_framework_by_id(framework_uuid="00fcf0e2-b9c3-11e7-a4ad-47f36833e889")
-  ```
+### `get_framework_by_id(framework_uuid)`
+Returns a summary, not every item:
+- `framework` metadata, including `adoption_status`
+- `warnings` if the framework isn't Adopted
+- `total_items` and `item_types` (counts)
+- `education_levels`
+- `association_types`
+- the first 50 `top_level` items
 
-- **Sample Output:**
-  ```json
-  {
-    "framework_uuid": "00fcf0e2-b9c3-11e7-a4ad-47f36833e889",
-    "CFDocument": {
-      "identifier": "00fcf0e2-b9c3-11e7-a4ad-47f36833e889",
-      "title": "Computer Science - Georgia Standards of Excellence",
-      "framework_type": "Standards",
-      "creator": "Georgia Department of Education"
-    },
-    "total_items": 2453,
-    "CFItems": [
-      {
-        "identifier": "cbf16dd6-46b2-11ea-a7df-0242ac150004",
-        "code": "11.07300",
-        "statement": "Computer Science Kindergarten",
-        "type": "Course",
-        "education_level": ["KG"]
-      }
-    ],
-    "total_associations": 2483,
-    "CFAssociations": [...]
-  }
-  ```
+### `get_framework_items(framework_uuid, item_type=None, education_level=None, limit=50, offset=0)`
+Pages through items.
+- **item_type** must match exactly (e.g. `Standard`, `Course`, `Content Standard`).
+- **education_level** accepts `K`, `KG`, `1`, `01`, `1st` or `09`.
 
----
+### `get_item(framework_uuid, item)`
+**item** is an identifier, item URI or code (e.g. `1.F.P.2`, `IT-IDT-1`). Returns:
+- the full item
+- the `breadcrumb` (ancestors, top first)
+- direct `children`
+- non-hierarchy `associations` such as `exactMatchOf` crosswalks
 
-### 3. `get_courses_and_pathways`
-Extracts course codes (`XX.XXXXX`), course names, CTAE clusters, and CTAE pathways from a framework package.
+If a code matches more than one item (some Georgia codes repeat), it returns `candidates` instead; call it again with an identifier.
 
-- **Parameters:**
-  - `framework_uuid` *(str, required)*: UUID string of target framework package.
-  - `filter_type` *(optional str)*: Filter type (`'Course'`, `'Pathway'`, `'Cluster'`, `'CTAE'`).
+### `get_children(framework_uuid, item=None, limit=50, offset=0)`
+Lists direct children in their published order. With no item, it lists the framework's top level. Each child shows `has_children`.
 
-- **Example Call:**
-  ```python
-  await get_courses_and_pathways(
-      framework_uuid="a1215918-318b-4773-9229-26a266e3ad62", 
-      filter_type="Course"
-  )
-  ```
+### `get_ancestors(framework_uuid, item)`
+Returns the path from the top level down to the item.
 
-- **Sample Output:**
-  ```json
-  {
-    "framework_uuid": "a1215918-318b-4773-9229-26a266e3ad62",
-    "framework_title": "CTAE - Georgia Standards of Excellence: Career Cluster: Digital Technology",
-    "filter_applied": "Course",
-    "total_matches": 28,
-    "courses_and_pathways": [
-      {
-        "identifier": "b8f52e12-46b2-11ea-a7df-0242ac150004",
-        "code": "11.41500",
-        "name": "Introduction to Digital Technology",
-        "item_type": "Course",
-        "categories": ["Course", "CTAE"],
-        "is_course_code": true,
-        "education_level": ["09", "10", "11", "12"]
-      },
-      {
-        "identifier": "b8f53c86-46b2-11ea-a7df-0242ac150004",
-        "code": "11.48100",
-        "name": "Introduction to Cybersecurity",
-        "item_type": "Course",
-        "categories": ["Course", "CTAE"],
-        "is_course_code": true,
-        "education_level": ["09", "10", "11", "12"]
-      }
-    ]
-  }
-  ```
+### `get_associations(framework_uuid, item, association_type=None)`
+Lists all associations to or from the item, with `direction` (outgoing or incoming) and a summary of the other item. Items outside the framework are shown by title and URI.
+
+### `search_standards(framework_uuid, query, education_level=None, item_type=None, limit=20, offset=0)`
+Ranked search:
+- an exact code match ranks first, then codes that start with the query
+- then items containing all the words, with a bonus for the exact phrase
+- hyphens and punctuation are ignored, so "silent e" matches "silent-e"
+- broader items (standards) rank above their sub-skills on ties
+
+Each match includes a `score`.
+
+### `get_courses_and_pathways(framework_uuid, filter_type=None, limit=50, offset=0)`
+Lists items by type:
+- **Course:** item type `Course`, or a code like `11.41500`. Courses include `standards_count`, the number of direct child standards.
+- **Pathway:** item types containing "pathway".
+- **Cluster:** item types containing "cluster".
+
+**filter_type** is `Course`, `Pathway` or `Cluster`.
+
+All tools return `{"error": "..."}` with a readable message if the API can't be reached or an item isn't found.
 
 ---
 
-### 4. `search_standards`
-Searches across all items in a framework package by keyword.
+## ⚙️ Configuration
 
-- **Parameters:**
-  - `framework_uuid` *(str, required)*: Framework package UUID.
-  - `query` *(str, required)*: Keyword or search phrase.
-
-- **Example Call:**
-  ```python
-  await search_standards(
-      framework_uuid="a1215918-318b-4773-9229-26a266e3ad62", 
-      query="Cybersecurity"
-  )
-  ```
-
-- **Sample Output:**
-  ```json
-  {
-    "framework_uuid": "a1215918-318b-4773-9229-26a266e3ad62",
-    "framework_title": "CTAE - Georgia Standards of Excellence: Career Cluster: Digital Technology",
-    "query": "Cybersecurity",
-    "total_matches": 15,
-    "matches": [
-      {
-        "identifier": "b8f53c86-46b2-11ea-a7df-0242ac150004",
-        "code": "11.48100",
-        "statement": "Introduction to Cybersecurity",
-        "item_type": "Course",
-        "grade_level": ["09", "10", "11", "12"]
-      },
-      {
-        "identifier": "b8f53d26-46b2-11ea-a7df-0242ac150004",
-        "code": "IT-ICS-3",
-        "statement": "Demonstrate an understanding of cybersecurity concepts and research.",
-        "item_type": "Content Standard",
-        "grade_level": ["09", "10", "11", "12"]
-      }
-    ]
-  }
-  ```
+| Variable | Default | Purpose |
+|---|---|---|
+| `GACASE_BASE_URL` | `https://case.georgiastandards.org/ims/case/v1p1` | CASE 1.1 API base URL |
+| `GACASE_CACHE_TTL` | `86400` | Seconds to keep downloaded data in memory (`0` disables) |
+| `GACASE_TIMEOUT` | `60` | Request timeout (seconds) |
 
 ---
 
-## ❓ Troubleshooting & FAQ
+## ❓ Troubleshooting
 
-#### Q: I get `ModuleNotFoundError: No module named 'mcp'`
-**Fix:** Ensure your virtual environment is activated (`source .venv/bin/activate`) and dependencies are installed (`pip install -r requirements.txt`).
+**`ModuleNotFoundError: No module named 'mcp'`**
+Activate the virtual environment and run `pip install -r requirements.txt`.
 
-#### Q: Network requests time out or fail with HTTP errors
-**Fix:** Verify internet access to `https://case.georgiastandards.org`. SuitCASE API is public and requires no API key.
+**`cannot import name 'FastMCP'`**
+MCP 2.x is installed. Reinstall from `requirements.txt`, which pins `mcp<2`.
 
-#### Q: How do I find framework UUIDs?
-**Fix:** Call `get_framework_packages()` first without a UUID parameter to search by title or keyword (e.g., `'Digital Technology'`, `'Mathematics'`, `'State-Funded'`) and extract the `identifier` UUID from the list.
+**Requests time out or fail**
+Check access to `https://case.georgiastandards.org`. The API is public and needs no key. Large frameworks can take a few seconds the first time; after that they're cached.
+
+**A code returns "matches N items"**
+That code is used more than once in the framework. Pick the right item from `candidates` and pass its `identifier`.
+
+**Results come from a retired framework**
+Check `adoption_status`. Use `get_framework_packages()` (which hides Deprecated frameworks) to find the current one.

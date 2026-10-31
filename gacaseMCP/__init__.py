@@ -1,7 +1,7 @@
 """
-Georgia Department of Education SuitCASE MCP Server (gacaseMCP)
+Georgia SuitCASE MCP Server (gacaseMCP).
+
+Run with `python -m gacaseMCP.main` or `python main.py`.
 """
 
-from .main import mcp
-
-__all__ = ["mcp"]
+__version__ = "1.1.0"

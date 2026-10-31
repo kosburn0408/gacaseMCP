@@ -1,379 +1,421 @@
+"""gacaseMCP — MCP server for Georgia's SuitCASE (1EdTech CASE 1.1) standards API.
+
+Tools are designed for AI assistants: they return summaries and pages, not
+whole frameworks, and let the assistant walk the standards tree (children,
+ancestors, associations) instead of reading everything at once.
+"""
+
+from __future__ import annotations
+
 import re
-import httpx
-from typing import Optional, List, Dict, Any
+from typing import Any, Optional
+
 from mcp.server.fastmcp import FastMCP
 
-# Initialize FastMCP Server for Georgia SuitCASE
+from gacaseMCP.client import CaseAPIError, base_url, get_documents, get_package
+from gacaseMCP.framework import FrameworkIndex, index_for, item_summary, normalize_level
+
 mcp = FastMCP("gacaseMCP")
 
-BASE_URL = "https://case.georgiastandards.org/ims/case/v1p1"
-HEADERS = {
-    "Accept": "application/json",
-    "User-Agent": "gacaseMCP/1.0 (Georgia Department of Education SuitCASE MCP Server)"
-}
-COURSE_CODE_REGEX = re.compile(r'\b\d{2}\.\d{5}\b')
+COURSE_CODE_REGEX = re.compile(r"^\d{2}\.\d{5}$")
+MAX_LIMIT = 200
+
+
+def _err(exc: Exception) -> dict[str, Any]:
+    return {"error": str(exc)}
+
+
+def _page(ids: list[str], limit: int, offset: int) -> tuple[list[str], dict[str, Any]]:
+    limit = max(1, min(int(limit or 50), MAX_LIMIT))
+    offset = max(0, int(offset or 0))
+    page = ids[offset:offset + limit]
+    nxt = offset + limit if offset + limit < len(ids) else None
+    return page, {"total": len(ids), "offset": offset, "limit": limit, "next_offset": nxt}
+
+
+def _doc_summary(doc: dict[str, Any]) -> dict[str, Any]:
+    pkg_uri = doc.get("CFPackageURI")
+    return {
+        "identifier": doc.get("identifier"),
+        "title": doc.get("title"),
+        "adoption_status": doc.get("adoptionStatus"),
+        "framework_type": (doc.get("frameworkType") or "").strip() or None,
+        "subject": doc.get("subject"),
+        "creator": doc.get("creator"),
+        "publisher": doc.get("publisher"),
+        "version": doc.get("version"),
+        "status_start_date": doc.get("statusStartDate"),
+        "status_end_date": doc.get("statusEndDate"),
+        "last_change_date_time": doc.get("lastChangeDateTime"),
+        "case_version": doc.get("caseVersion"),
+        "official_source_url": doc.get("officialSourceURL"),
+        "uri": doc.get("uri"),
+        "package_uri": pkg_uri.get("uri") if isinstance(pkg_uri, dict) else pkg_uri,
+    }
+
+
+async def _index(framework_uuid: str) -> FrameworkIndex:
+    return index_for(await get_package(framework_uuid))
+
+
+def _status_warning(idx: FrameworkIndex) -> list[str]:
+    status = (idx.document.get("adoptionStatus") or "").strip()
+    if status and status.lower() != "adopted":
+        return [f"This framework's adoption status is '{status}'. Check for a current (Adopted) framework before aligning to it."]
+    return []
+
+
+# ── Frameworks ──────────────────────────────────────────────────────────────
 
 
 @mcp.tool()
 async def get_framework_packages(
     query: Optional[str] = None,
-    framework_type: Optional[str] = None
-) -> Dict[str, Any]:
-    """Search or list top-level framework documents from Georgia SuitCASE API (e.g., CTAE Pathways, High Demand Careers, Course Guides, Subject Standards).
+    framework_type: Optional[str] = None,
+    include_deprecated: bool = False,
+) -> dict[str, Any]:
+    """List Georgia SuitCASE frameworks (standards, course codes, CTAE clusters, career lists).
+
+    Only Adopted/Draft frameworks are returned unless include_deprecated is true, so retired
+    standards aren't used by mistake. Each result includes adoption_status.
 
     Args:
-        query: Optional keyword to filter framework documents by title, description, or notes.
-        framework_type: Optional framework type to filter by (e.g., 'Standards', 'CourseCodes', 'High Demand Career List Regions').
-
-    Returns:
-        List of framework titles, identifiers (UUIDs), subject/framework types, publication dates, and metadata.
+        query: Optional keyword matched against title, description, notes, subject and type.
+        framework_type: Optional type, e.g. 'Standards', 'CourseCodes', 'Credential List'.
+        include_deprecated: Also return Deprecated frameworks (default false).
     """
-    url = f"{BASE_URL}/CFDocuments"
     try:
-        async with httpx.AsyncClient(timeout=30.0, headers=HEADERS) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            data = response.json()
-    except httpx.HTTPStatusError as e:
-        return {"error": f"HTTP error {e.response.status_code} while fetching framework packages: {str(e)}"}
-    except httpx.RequestError as e:
-        return {"error": f"Request error while fetching framework packages: {str(e)}"}
-    except Exception as e:
-        return {"error": f"Unexpected error while fetching framework packages: {str(e)}"}
+        docs = await get_documents()
+    except CaseAPIError as exc:
+        return _err(exc)
 
-    raw_docs = data.get("CFDocuments", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
-
-    parsed_docs = []
-    for doc in raw_docs:
-        title = doc.get("title") or ""
-        desc = doc.get("description") or ""
-        notes = doc.get("notes") or ""
-        ftype = doc.get("frameworkType") or ""
-
-        # Filter by framework_type if provided
-        if framework_type and framework_type.lower() not in ftype.lower():
+    q = (query or "").strip().lower()
+    ft = (framework_type or "").strip().lower()
+    out, hidden = [], 0
+    for d in docs:
+        s = _doc_summary(d)
+        if not include_deprecated and (s["adoption_status"] or "").strip().lower() == "deprecated":
+            hidden += 1
             continue
-
-        # Filter by query if provided
-        if query:
-            q_lower = query.lower()
-            if (q_lower not in title.lower() and 
-                q_lower not in desc.lower() and 
-                q_lower not in notes.lower() and 
-                q_lower not in ftype.lower()):
+        if ft and ft not in (s["framework_type"] or "").lower():
+            continue
+        if q:
+            hay = " ".join(str(x or "") for x in (
+                s["title"], d.get("description"), d.get("notes"), s["framework_type"],
+                " ".join(s["subject"]) if isinstance(s["subject"], list) else s["subject"],
+            )).lower()
+            if q not in hay:
                 continue
-
-        package_uri_val = doc.get("CFPackageURI")
-        pkg_uri = package_uri_val.get("uri") if isinstance(package_uri_val, dict) else package_uri_val
-
-        parsed_docs.append({
-            "identifier": doc.get("identifier"),
-            "title": title,
-            "framework_type": ftype,
-            "creator": doc.get("creator"),
-            "publisher": doc.get("publisher"),
-            "last_change_date_time": doc.get("lastChangeDateTime"),
-            "case_version": doc.get("caseVersion"),
-            "description": desc,
-            "notes": notes,
-            "uri": doc.get("uri"),
-            "package_uri": pkg_uri
-        })
-
-    return {
-        "total_packages": len(parsed_docs),
+        out.append(s)
+    out.sort(key=lambda s: (s["title"] or "").lower())
+    result: dict[str, Any] = {
+        "total_packages": len(out),
         "query": query,
         "framework_type": framework_type,
-        "packages": parsed_docs
+        "packages": out,
+        "source": base_url(),
+    }
+    if hidden:
+        result["deprecated_hidden"] = hidden
+    return result
+
+
+@mcp.tool()
+async def get_framework_by_id(framework_uuid: str) -> dict[str, Any]:
+    """Summarize one framework: metadata, adoption status, item counts by type and grade, and its top level.
+
+    Does not return every item (frameworks can hold thousands). Use get_children to walk the
+    tree, get_framework_items to page through items, or search_standards to find items.
+
+    Args:
+        framework_uuid: Framework identifier from get_framework_packages.
+    """
+    try:
+        idx = await _index(framework_uuid)
+    except CaseAPIError as exc:
+        return _err(exc)
+
+    type_counts: dict[str, int] = {}
+    level_counts: dict[str, int] = {}
+    for it in idx.items.values():
+        t = (it.get("CFItemType") or "(none)").strip()
+        type_counts[t] = type_counts.get(t, 0) + 1
+        for lvl in it.get("educationLevel") or []:
+            level_counts[lvl] = level_counts.get(lvl, 0) + 1
+    assoc_counts: dict[str, int] = {}
+    for a in idx.associations:
+        t = a.get("associationType") or "(none)"
+        assoc_counts[t] = assoc_counts.get(t, 0) + 1
+
+    top = idx.child_ids(None)
+    return {
+        "framework": _doc_summary(idx.document),
+        "warnings": _status_warning(idx),
+        "total_items": len(idx.items),
+        "item_types": dict(sorted(type_counts.items(), key=lambda kv: -kv[1])),
+        "education_levels": dict(sorted(level_counts.items())),
+        "association_types": dict(sorted(assoc_counts.items(), key=lambda kv: -kv[1])),
+        "top_level": {"total": len(top), "items": [item_summary(idx.items[i]) for i in top[:50]]},
+        "next_steps": "Use get_children(framework_uuid, item) to drill down, or search_standards to find items.",
     }
 
 
 @mcp.tool()
-async def get_framework_by_id(framework_uuid: str) -> Dict[str, Any]:
-    """Pull the complete standard framework bundle by UUID from Georgia SuitCASE API.
+async def get_framework_items(
+    framework_uuid: str,
+    item_type: Optional[str] = None,
+    education_level: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Page through a framework's items, optionally filtered by item type and grade.
 
     Args:
-        framework_uuid: UUID identifier of the framework package (e.g., '00fcf0e2-b9c3-11e7-a4ad-47f36833e889').
-
-    Returns:
-        Parsed payload returning document metadata (CFDocument), list of competencies/standards (CFItems), and relationships (CFAssociations).
+        framework_uuid: Framework identifier.
+        item_type: Exact CFItemType, e.g. 'Standard', 'Course', 'Content Standard' (see get_framework_by_id).
+        education_level: Grade such as 'K', '1', '09' (matched against educationLevel).
+        limit: Items per page (max 200). offset: Starting position.
     """
-    if not framework_uuid or not framework_uuid.strip():
-        return {"error": "framework_uuid parameter is required and cannot be empty."}
-
-    uuid_clean = framework_uuid.strip()
-    url = f"{BASE_URL}/CFPackages/{uuid_clean}"
-
     try:
-        async with httpx.AsyncClient(timeout=45.0, headers=HEADERS) as client:
-            response = await client.get(url)
-            if response.status_code == 404:
-                return {"error": f"Framework UUID '{uuid_clean}' not found (HTTP 404)."}
-            response.raise_for_status()
-            pkg = response.json()
-    except httpx.HTTPStatusError as e:
-        return {"error": f"HTTP error {e.response.status_code} while fetching framework '{uuid_clean}': {str(e)}"}
-    except httpx.RequestError as e:
-        return {"error": f"Request error while fetching framework '{uuid_clean}': {str(e)}"}
-    except Exception as e:
-        return {"error": f"Unexpected error while fetching framework '{uuid_clean}': {str(e)}"}
-
-    if not isinstance(pkg, dict):
-        return {"error": f"Invalid payload structure returned for framework UUID '{uuid_clean}'."}
-
-    doc = pkg.get("CFDocument", {})
-    items = pkg.get("CFItems", [])
-    assocs = pkg.get("CFAssociations", [])
-
-    parsed_doc = {
-        "identifier": doc.get("identifier"),
-        "title": doc.get("title"),
-        "framework_type": doc.get("frameworkType"),
-        "creator": doc.get("creator"),
-        "publisher": doc.get("publisher"),
-        "last_change_date_time": doc.get("lastChangeDateTime"),
-        "case_version": doc.get("caseVersion"),
-        "description": doc.get("description"),
-        "notes": doc.get("notes"),
-        "uri": doc.get("uri")
+        idx = await _index(framework_uuid)
+    except CaseAPIError as exc:
+        return _err(exc)
+    ids = idx.filter(item_type, education_level)
+    page, paging = _page(ids, limit, offset)
+    return {
+        "framework_title": idx.document.get("title"),
+        "warnings": _status_warning(idx),
+        "filters": {"item_type": item_type, "education_level": normalize_level(education_level)},
+        **paging,
+        "items": [item_summary(idx.items[i]) for i in page],
     }
 
-    parsed_items = []
-    for item in items:
-        code = item.get("humanCodingScheme") or item.get("fullStatementCode") or ""
-        parsed_items.append({
-            "identifier": item.get("identifier"),
-            "code": code,
-            "statement": item.get("fullStatement"),
-            "type": item.get("CFItemType"),
-            "education_level": item.get("educationLevel"),
-            "status_start_date": item.get("statusStartDate"),
-            "extensions": item.get("extensions")
-        })
 
-    parsed_assocs = []
-    for assoc in assocs:
-        origin = assoc.get("originNodeURI", {})
-        dest = assoc.get("destinationNodeURI", {})
-        origin_id = origin.get("identifier") if isinstance(origin, dict) else origin
-        dest_id = dest.get("identifier") if isinstance(dest, dict) else dest
+# ── Navigating the tree ─────────────────────────────────────────────────────
 
-        parsed_assocs.append({
-            "identifier": assoc.get("identifier"),
-            "association_type": assoc.get("associationType"),
-            "origin_identifier": origin_id,
-            "destination_identifier": dest_id
-        })
 
+def _resolve_one(idx: FrameworkIndex, item: str) -> tuple[str | None, dict[str, Any] | None]:
+    ids = idx.resolve(item)
+    if not ids:
+        return None, {"error": f"No item with identifier or code '{item}' in this framework."}
+    if len(ids) > 1:
+        return None, {
+            "error": f"Code '{item}' matches {len(ids)} items; pass an identifier instead.",
+            "candidates": [item_summary(idx.items[i]) for i in ids],
+        }
+    return ids[0], None
+
+
+@mcp.tool()
+async def get_item(framework_uuid: str, item: str) -> dict[str, Any]:
+    """Get one standard by identifier or human code (e.g. '1.F.P.2', 'IT-IDT-1'), with its full statement,
+    breadcrumb of parents, direct children, and non-hierarchy associations (crosswalks, prerequisites).
+
+    Args:
+        framework_uuid: Framework identifier.
+        item: Item identifier (UUID or URI) or humanCodingScheme code.
+    """
+    try:
+        idx = await _index(framework_uuid)
+    except CaseAPIError as exc:
+        return _err(exc)
+    iid, err = _resolve_one(idx, item)
+    if err:
+        return err
+    kids = idx.child_ids(iid)
+    other = [r for r in idx.related(iid) if r["association_type"] != "isChildOf"]
     return {
-        "framework_uuid": uuid_clean,
-        "CFDocument": parsed_doc,
-        "total_items": len(parsed_items),
-        "CFItems": parsed_items,
-        "total_associations": len(parsed_assocs),
-        "CFAssociations": parsed_assocs
+        "framework_title": idx.document.get("title"),
+        "warnings": _status_warning(idx),
+        "item": item_summary(idx.items[iid], full=True),
+        "breadcrumb": [item_summary(idx.items[a]) for a in idx.ancestors(iid)],
+        "children": {"total": len(kids), "items": [item_summary(idx.items[c]) for c in kids[:50]]},
+        "associations": other[:50],
+    }
+
+
+@mcp.tool()
+async def get_children(
+    framework_uuid: str,
+    item: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """List the direct children of an item in teaching order (or the framework's top level if item is omitted).
+
+    Args:
+        framework_uuid: Framework identifier.
+        item: Parent identifier or code. Omit for the top level.
+        limit: Items per page (max 200). offset: Starting position.
+    """
+    try:
+        idx = await _index(framework_uuid)
+    except CaseAPIError as exc:
+        return _err(exc)
+    parent_id = None
+    if item:
+        parent_id, err = _resolve_one(idx, item)
+        if err:
+            return err
+    kids = idx.child_ids(parent_id)
+    page, paging = _page(kids, limit, offset)
+    return {
+        "framework_title": idx.document.get("title"),
+        "parent": item_summary(idx.items[parent_id]) if parent_id else {"title": idx.document.get("title"), "level": "framework"},
+        **paging,
+        "children": [dict(item_summary(idx.items[c]), has_children=bool(idx.child_ids(c))) for c in page],
+    }
+
+
+@mcp.tool()
+async def get_ancestors(framework_uuid: str, item: str) -> dict[str, Any]:
+    """Return the path from the framework's top level down to an item (domain → strand → standard …).
+
+    Args:
+        framework_uuid: Framework identifier.
+        item: Item identifier or code.
+    """
+    try:
+        idx = await _index(framework_uuid)
+    except CaseAPIError as exc:
+        return _err(exc)
+    iid, err = _resolve_one(idx, item)
+    if err:
+        return err
+    return {
+        "framework_title": idx.document.get("title"),
+        "item": item_summary(idx.items[iid]),
+        "ancestors": [item_summary(idx.items[a]) for a in idx.ancestors(iid)],
+    }
+
+
+@mcp.tool()
+async def get_associations(
+    framework_uuid: str,
+    item: str,
+    association_type: Optional[str] = None,
+) -> dict[str, Any]:
+    """List an item's CASE associations: isChildOf, exactMatchOf, isRelatedTo, precedes, isPartOf, etc.
+
+    Args:
+        framework_uuid: Framework identifier.
+        item: Item identifier or code.
+        association_type: Optional filter, e.g. 'exactMatchOf' or 'isRelatedTo'.
+    """
+    try:
+        idx = await _index(framework_uuid)
+    except CaseAPIError as exc:
+        return _err(exc)
+    iid, err = _resolve_one(idx, item)
+    if err:
+        return err
+    rel = idx.related(iid, association_type)
+    return {
+        "framework_title": idx.document.get("title"),
+        "item": item_summary(idx.items[iid]),
+        "total": len(rel),
+        "associations": rel[:200],
+    }
+
+
+# ── Search & courses ────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def search_standards(
+    framework_uuid: str,
+    query: str,
+    education_level: Optional[str] = None,
+    item_type: Optional[str] = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Search a framework's items by code or keywords, ranked by relevance.
+
+    Matches words rather than exact strings ("silent e" finds "silent-e"), ranks exact code
+    matches and full-phrase matches first, and can filter by grade and item type.
+
+    Args:
+        framework_uuid: Framework identifier.
+        query: Code (e.g. '1.F.P') or keywords (e.g. 'decode silent e', 'cybersecurity').
+        education_level: Optional grade, e.g. 'K', '3', '09'.
+        item_type: Optional CFItemType, e.g. 'Standard', 'Course'.
+        limit: Results per page (max 200). offset: Starting position.
+    """
+    if not query or not query.strip():
+        return {"error": "query is required."}
+    try:
+        idx = await _index(framework_uuid)
+    except CaseAPIError as exc:
+        return _err(exc)
+    ranked = idx.search(query, item_type, education_level)
+    ids = [i for _, i in ranked]
+    scores = {i: s for s, i in ranked}
+    page, paging = _page(ids, limit, offset)
+    return {
+        "framework_title": idx.document.get("title"),
+        "warnings": _status_warning(idx),
+        "query": query.strip(),
+        "filters": {"education_level": normalize_level(education_level), "item_type": item_type},
+        **paging,
+        "matches": [dict(item_summary(idx.items[i]), score=round(scores[i], 1)) for i in page],
     }
 
 
 @mcp.tool()
 async def get_courses_and_pathways(
     framework_uuid: str,
-    filter_type: Optional[str] = None
-) -> Dict[str, Any]:
-    """Filter items within a framework package to extract course codes, course names, CTAE clusters, and CTAE pathways.
+    filter_type: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """List courses, pathways and clusters in a framework, using each item's CFItemType.
+
+    Courses are items typed 'Course' or coded like Georgia course numbers (NN.NNNNN).
+    Pathways and clusters come from item types containing 'pathway' or 'cluster'.
 
     Args:
-        framework_uuid: UUID identifier of the framework package.
-        filter_type: Optional filter string to narrow results ('Course', 'Pathway', 'Cluster', 'CTAE', etc.).
-
-    Returns:
-        Structured payload containing matching course codes, names, CTAE clusters, and CTAE pathways.
+        framework_uuid: Framework identifier.
+        filter_type: Optional 'Course', 'Pathway' or 'Cluster'.
+        limit: Results per page (max 200). offset: Starting position.
     """
-    if not framework_uuid or not framework_uuid.strip():
-        return {"error": "framework_uuid parameter is required and cannot be empty."}
-
-    uuid_clean = framework_uuid.strip()
-    url = f"{BASE_URL}/CFPackages/{uuid_clean}"
-
     try:
-        async with httpx.AsyncClient(timeout=45.0, headers=HEADERS) as client:
-            response = await client.get(url)
-            if response.status_code == 404:
-                return {"error": f"Framework UUID '{uuid_clean}' not found (HTTP 404)."}
-            response.raise_for_status()
-            pkg = response.json()
-    except httpx.HTTPStatusError as e:
-        return {"error": f"HTTP error {e.response.status_code} while fetching framework '{uuid_clean}': {str(e)}"}
-    except httpx.RequestError as e:
-        return {"error": f"Request error while fetching framework '{uuid_clean}': {str(e)}"}
-    except Exception as e:
-        return {"error": f"Unexpected error while fetching framework '{uuid_clean}': {str(e)}"}
-
-    if not isinstance(pkg, dict):
-        return {"error": f"Invalid payload structure returned for framework UUID '{uuid_clean}'."}
-
-    doc = pkg.get("CFDocument", {})
-    items = pkg.get("CFItems", [])
-
-    if not items:
-        return {
-            "framework_uuid": uuid_clean,
-            "framework_title": doc.get("title"),
-            "filter_applied": filter_type,
-            "total_matches": 0,
-            "courses_and_pathways": [],
-            "message": "Framework package contained no items."
-        }
-
-    results = []
-    norm_filter = filter_type.strip().lower() if filter_type else None
-
-    for item in items:
-        code = item.get("humanCodingScheme") or item.get("fullStatementCode") or ""
-        stmt = item.get("fullStatement") or ""
-        itype = item.get("CFItemType") or ""
-        ed_level = item.get("educationLevel")
-
-        is_course_code = bool(COURSE_CODE_REGEX.search(code)) or (itype.lower() == 'course')
-        is_pathway = ('pathway' in stmt.lower()) or ('pathway' in itype.lower())
-        is_cluster = ('cluster' in stmt.lower()) or ('cluster' in itype.lower())
-        is_ctae = ('ctae' in stmt.lower()) or ('ctae' in doc.get("title", "").lower()) or is_pathway or is_cluster
-
-        categories = []
-        if is_course_code:
-            categories.append("Course")
-        if is_pathway:
-            categories.append("Pathway")
-        if is_cluster:
-            categories.append("Cluster")
-        if is_ctae:
-            categories.append("CTAE")
-        if not categories:
-            categories.append(itype or "Other")
-
-        if norm_filter:
-            match = False
-            if norm_filter in ['course', 'courses'] and is_course_code:
-                match = True
-            elif norm_filter in ['pathway', 'pathways'] and is_pathway:
-                match = True
-            elif norm_filter in ['cluster', 'clusters'] and is_cluster:
-                match = True
-            elif norm_filter == 'ctae' and is_ctae:
-                match = True
-            elif any(norm_filter in cat.lower() for cat in categories):
-                match = True
-            elif norm_filter in code.lower() or norm_filter in stmt.lower() or norm_filter in itype.lower():
-                match = True
-
-            if not match:
-                continue
-
-        results.append({
-            "identifier": item.get("identifier"),
-            "code": code,
-            "name": stmt,
-            "item_type": itype,
-            "categories": categories,
-            "is_course_code": is_course_code,
-            "education_level": ed_level,
-            "status_start_date": item.get("statusStartDate"),
-            "extensions": item.get("extensions")
-        })
-
+        idx = await _index(framework_uuid)
+    except CaseAPIError as exc:
+        return _err(exc)
+    want = (filter_type or "").strip().lower().rstrip("s")
+    found: list[tuple[str, str]] = []
+    for iid, it in idx.items.items():
+        itype = (it.get("CFItemType") or "").strip().lower()
+        code = (it.get("humanCodingScheme") or "").strip()
+        if itype == "course" or COURSE_CODE_REGEX.match(code):
+            cat = "Course"
+        elif "pathway" in itype:
+            cat = "Pathway"
+        elif "cluster" in itype:
+            cat = "Cluster"
+        else:
+            continue
+        if want and cat.lower() != want:
+            continue
+        found.append((cat, iid))
+    found.sort(key=lambda t: (t[0], idx.items[t[1]].get("humanCodingScheme") or ""))
+    page, paging = _page([i for _, i in found], limit, offset)
+    cats = dict((i, c) for c, i in found)
+    counts: dict[str, int] = {}
+    for c, _ in found:
+        counts[c] = counts.get(c, 0) + 1
     return {
-        "framework_uuid": uuid_clean,
-        "framework_title": doc.get("title"),
+        "framework_title": idx.document.get("title"),
+        "warnings": _status_warning(idx),
         "filter_applied": filter_type,
-        "total_matches": len(results),
-        "courses_and_pathways": results
-    }
-
-
-@mcp.tool()
-async def search_standards(
-    framework_uuid: str,
-    query: str
-) -> Dict[str, Any]:
-    """Search across parsed framework items by keyword (e.g., 'Web Development', 'Cybersecurity', 'Algebra').
-
-    Args:
-        framework_uuid: UUID identifier of the framework package.
-        query: Keyword or phrase to search for within standard statements, codes, types, and levels.
-
-    Returns:
-        List of matching items showing code, statement, type, and grade level/cluster mappings.
-    """
-    if not framework_uuid or not framework_uuid.strip():
-        return {"error": "framework_uuid parameter is required and cannot be empty."}
-    if not query or not query.strip():
-        return {"error": "query parameter is required and cannot be empty."}
-
-    uuid_clean = framework_uuid.strip()
-    query_clean = query.strip()
-    url = f"{BASE_URL}/CFPackages/{uuid_clean}"
-
-    try:
-        async with httpx.AsyncClient(timeout=45.0, headers=HEADERS) as client:
-            response = await client.get(url)
-            if response.status_code == 404:
-                return {"error": f"Framework UUID '{uuid_clean}' not found (HTTP 404)."}
-            response.raise_for_status()
-            pkg = response.json()
-    except httpx.HTTPStatusError as e:
-        return {"error": f"HTTP error {e.response.status_code} while fetching framework '{uuid_clean}': {str(e)}"}
-    except httpx.RequestError as e:
-        return {"error": f"Request error while fetching framework '{uuid_clean}': {str(e)}"}
-    except Exception as e:
-        return {"error": f"Unexpected error while fetching framework '{uuid_clean}': {str(e)}"}
-
-    if not isinstance(pkg, dict):
-        return {"error": f"Invalid payload structure returned for framework UUID '{uuid_clean}'."}
-
-    doc = pkg.get("CFDocument", {})
-    items = pkg.get("CFItems", [])
-
-    if not items:
-        return {
-            "framework_uuid": uuid_clean,
-            "framework_title": doc.get("title"),
-            "query": query_clean,
-            "total_matches": 0,
-            "matches": [],
-            "message": "Framework package contained no items."
-        }
-
-    q_lower = query_clean.lower()
-    matches = []
-
-    for item in items:
-        code = item.get("humanCodingScheme") or item.get("fullStatementCode") or ""
-        stmt = item.get("fullStatement") or ""
-        itype = item.get("CFItemType") or ""
-        ed_level = item.get("educationLevel") or []
-        ed_str = " ".join(ed_level) if isinstance(ed_level, list) else str(ed_level)
-
-        if (q_lower in code.lower() or 
-            q_lower in stmt.lower() or 
-            q_lower in itype.lower() or 
-            q_lower in ed_str.lower()):
-
-            matches.append({
-                "identifier": item.get("identifier"),
-                "code": code,
-                "statement": stmt,
-                "item_type": itype,
-                "grade_level": ed_level,
-                "status_start_date": item.get("statusStartDate"),
-                "extensions": item.get("extensions")
-            })
-
-    return {
-        "framework_uuid": uuid_clean,
-        "framework_title": doc.get("title"),
-        "query": query_clean,
-        "total_matches": len(matches),
-        "matches": matches
+        "counts": counts,
+        **paging,
+        "courses_and_pathways": [
+            dict(item_summary(idx.items[i]), category=cats[i],
+                 standards_count=len(idx.child_ids(i)) if cats[i] == "Course" else None)
+            for i in page
+        ],
     }
 
 
