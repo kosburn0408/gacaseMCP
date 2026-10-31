@@ -1,62 +1,90 @@
 # gacaseMCP
 
-Model Context Protocol (MCP) server written in Python using FastMCP for the **Georgia Department of Education SuitCASE API** (`https://case.georgiastandards.org/ims/case/v1p1/`).
+Model Context Protocol (MCP) server for **Georgia's SuitCASE standards API** (`https://case.georgiastandards.org/ims/case/v1p1/`), which publishes Georgia's standards, course codes and CTAE frameworks in the 1EdTech CASE® 1.1 format.
 
-This MCP server enables AI assistants and agents to search, fetch, and parse Georgia learning standards, course codes, course names, CTAE clusters, and CTAE pathways directly from official state framework documents.
+It lets AI assistants find Georgia standards, course codes, CTAE clusters and pathways, and walk the standards hierarchy. Results come back as summaries and pages rather than whole frameworks, which can hold thousands of items.
 
-📘 **For detailed documentation, parameter specifications, and client integration instructions, view the [User Guide](User_guide.MD).**
+📘 **Full documentation:** [User Guide](User_guide.MD)
+
+> This is an independent project that reads the public SuitCASE API. It is not an official GaDOE service.
 
 ---
 
-## 🛠️ Tools Available
+## 🛠️ Tools
 
-### 1. `get_framework_packages`
-- **Description:** Search or list top-level framework documents (e.g., CTAE Pathways, High Demand Careers, Course Guides, Subject Standards).
-- **Parameters:**
-  - `query` (optional str): Keyword search term.
-  - `framework_type` (optional str): Filter by framework type (e.g., `'Standards'`, `'CourseCodes'`).
+| Tool | What it does |
+|---|---|
+| `get_framework_packages` | List frameworks with their **adoption status**. Deprecated frameworks are hidden unless `include_deprecated=true`. Filter by keyword or framework type |
+| `get_framework_by_id` | Summarize one framework: metadata, item counts by type and grade, association types, top-level items |
+| `get_framework_items` | Page through items, filtered by item type and grade |
+| `get_item` | One item by identifier **or code** (e.g. `1.F.P.2`), with full statement, breadcrumb, children and crosswalk associations |
+| `get_children` | Direct children of an item in teaching order (or the framework's top level) |
+| `get_ancestors` | Path from the top of the framework down to an item |
+| `get_associations` | An item's CASE associations (`isChildOf`, `exactMatchOf`, `isRelatedTo`, `precedes`, …) |
+| `search_standards` | Ranked search by code or keywords, with grade and item-type filters. Word-based, so "silent e" finds "silent-e" |
+| `get_courses_and_pathways` | Courses (item type `Course` or codes like `11.41500`), pathways and clusters, by item type |
 
-### 2. `get_framework_by_id`
-- **Description:** Pull complete standard framework bundle by UUID.
-- **Parameters:**
-  - `framework_uuid` (str): UUID identifier (e.g., `'00fcf0e2-b9c3-11e7-a4ad-47f36833e889'`).
-
-### 3. `get_courses_and_pathways`
-- **Description:** Extract and filter course codes (format `XX.XXXXX`), course names, CTAE clusters, and CTAE pathways within a framework package.
-- **Parameters:**
-  - `framework_uuid` (str): UUID identifier of framework package.
-  - `filter_type` (optional str): Filter string e.g. `'Course'`, `'Pathway'`, `'Cluster'`, `'CTAE'`.
-
-### 4. `search_standards`
-- **Description:** Search across framework items by keyword.
-- **Parameters:**
-  - `framework_uuid` (str): UUID identifier.
-  - `query` (str): Search term (e.g., `'Cybersecurity'`, `'Web Development'`, `'Algebra'`).
+Every list is paged with `limit` (max 200) and `offset`, and returns `next_offset` when there's more.
 
 ---
 
 ## 🚀 Quick Start
 
-1. **Install Dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python -m gacaseMCP.main          # stdio MCP server
+```
 
-2. **Run as Module:**
-   ```bash
-   python -m gacaseMCP.main
-   ```
+Inspect the tools interactively with the MCP Inspector (from `mcp[cli]`):
 
-3. **Run using FastMCP CLI:**
-   ```bash
-   fastmcp run main.py
-   ```
+```bash
+mcp dev main.py
+```
 
-4. **Integration with Antigravity CLI:**
-   Pre-configured at `.agents/mcp_config.json`. `agy-cli` automatically discovers and loads `gacaseMCP` via `/mcp`.
+Claude Desktop (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "gacaseMCP": {
+      "command": "/path/to/gacaseMCP/.venv/bin/python",
+      "args": ["-m", "gacaseMCP.main"],
+      "env": { "PYTHONPATH": "/path/to/gacaseMCP" }
+    }
+  }
+}
+```
+
+Antigravity CLI picks up `.agents/mcp_config.json` automatically.
 
 ---
 
-## 📖 Complete Documentation
+## ⚙️ Configuration
 
-Read [User_guide.MD](User_guide.MD) for full setup guides, JSON response schemas, and integration details for Claude Desktop, Antigravity CLI, and custom agents.
+| Variable | Default | Purpose |
+|---|---|---|
+| `GACASE_BASE_URL` | `https://case.georgiastandards.org/ims/case/v1p1` | CASE 1.1 API base URL |
+| `GACASE_CACHE_TTL` | `86400` | Seconds to keep downloaded frameworks in memory (`0` disables caching) |
+| `GACASE_TIMEOUT` | `60` | Request timeout in seconds |
+
+Frameworks are downloaded once and cached, so walking the tree or searching repeatedly doesn't re-download multi-megabyte packages.
+
+---
+
+## 🧪 Tests
+
+```bash
+pip install -e ".[test]"
+python -m pytest
+```
+
+Tests run against synthetic CASE responses (no network).
+
+---
+
+## Notes on Georgia's data
+
+- Georgia lists retired frameworks alongside current ones (for example, the Georgia Standards of Excellence ELA framework is *Deprecated*; the current K–12 ELA framework is *Adopted*). Check `adoption_status` before aligning to a framework.
+- Some item codes repeat within a framework. `get_item` returns the candidates and asks for an identifier when a code is ambiguous.
+- Item types differ by framework: ELA uses Domain / Big Idea / Standard / Skill; CTAE uses Course / Content Standard / Element / Component. `get_framework_by_id` lists the types in each.
