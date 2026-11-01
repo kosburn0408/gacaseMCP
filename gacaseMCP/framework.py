@@ -208,9 +208,9 @@ class FrameworkIndex:
 _index_cache: dict[str, tuple[int, FrameworkIndex]] = {}
 
 
-def index_for(pkg: dict[str, Any]) -> FrameworkIndex:
-    """Build (or reuse) the index for a package object."""
-    key = pkg.get("CFDocument", {}).get("identifier", "")
+def index_for(pkg: dict[str, Any], server: str = "") -> FrameworkIndex:
+    """Build (or reuse) the index for a package object (keyed by server + framework)."""
+    key = f"{server}:{pkg.get('CFDocument', {}).get('identifier', '')}"
     hit = _index_cache.get(key)
     if hit and hit[0] == id(pkg):
         return hit[1]

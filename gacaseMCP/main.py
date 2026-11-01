@@ -12,7 +12,15 @@ from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
 
-from gacaseMCP.client import CaseAPIError, base_url, get_documents, get_package
+from gacaseMCP.client import (
+    CaseAPIError,
+    get_by_uri,
+    get_documents,
+    get_item_associations as fetch_item_associations,
+    get_package,
+    get_server,
+    servers,
+)
 from gacaseMCP.framework import FrameworkIndex, index_for, item_summary, normalize_level
 
 mcp = FastMCP("gacaseMCP")
@@ -54,8 +62,10 @@ def _doc_summary(doc: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _index(framework_uuid: str) -> FrameworkIndex:
-    return index_for(await get_package(framework_uuid))
+async def _index(framework_uuid: str, server: Optional[str] = None) -> FrameworkIndex:
+    srv = get_server(server)
+    return index_for(await get_package(framework_uuid, srv.name), srv.name)
+
 
 
 def _status_warning(idx: FrameworkIndex) -> list[str]:
@@ -73,6 +83,7 @@ async def get_framework_packages(
     query: Optional[str] = None,
     framework_type: Optional[str] = None,
     include_deprecated: bool = False,
+    server: Optional[str] = None,
 ) -> dict[str, Any]:
     """List Georgia SuitCASE frameworks (standards, course codes, CTAE clusters, career lists).
 
@@ -83,9 +94,11 @@ async def get_framework_packages(
         query: Optional keyword matched against title, description, notes, subject and type.
         framework_type: Optional type, e.g. 'Standards', 'CourseCodes', 'Credential List'.
         include_deprecated: Also return Deprecated frameworks (default false).
+        server: CASE server name from list_case_servers (default: georgia).
     """
     try:
-        docs = await get_documents()
+        srv = get_server(server)
+        docs = await get_documents(srv.name)
     except CaseAPIError as exc:
         return _err(exc)
 
@@ -113,7 +126,8 @@ async def get_framework_packages(
         "query": query,
         "framework_type": framework_type,
         "packages": out,
-        "source": base_url(),
+        "server": srv.name,
+        "source": srv.base_url,
     }
     if hidden:
         result["deprecated_hidden"] = hidden
@@ -121,7 +135,7 @@ async def get_framework_packages(
 
 
 @mcp.tool()
-async def get_framework_by_id(framework_uuid: str) -> dict[str, Any]:
+async def get_framework_by_id(framework_uuid: str, server: Optional[str] = None) -> dict[str, Any]:
     """Summarize one framework: metadata, adoption status, item counts by type and grade, and its top level.
 
     Does not return every item (frameworks can hold thousands). Use get_children to walk the
@@ -129,9 +143,10 @@ async def get_framework_by_id(framework_uuid: str) -> dict[str, Any]:
 
     Args:
         framework_uuid: Framework identifier from get_framework_packages.
+        server: CASE server name from list_case_servers (default: georgia).
     """
     try:
-        idx = await _index(framework_uuid)
+        idx = await _index(framework_uuid, server)
     except CaseAPIError as exc:
         return _err(exc)
 
@@ -167,6 +182,7 @@ async def get_framework_items(
     education_level: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    server: Optional[str] = None,
 ) -> dict[str, Any]:
     """Page through a framework's items, optionally filtered by item type and grade.
 
@@ -175,9 +191,10 @@ async def get_framework_items(
         item_type: Exact CFItemType, e.g. 'Standard', 'Course', 'Content Standard' (see get_framework_by_id).
         education_level: Grade such as 'K', '1', '09' (matched against educationLevel).
         limit: Items per page (max 200). offset: Starting position.
+        server: CASE server name from list_case_servers (default: georgia).
     """
     try:
-        idx = await _index(framework_uuid)
+        idx = await _index(framework_uuid, server)
     except CaseAPIError as exc:
         return _err(exc)
     ids = idx.filter(item_type, education_level)
@@ -207,16 +224,17 @@ def _resolve_one(idx: FrameworkIndex, item: str) -> tuple[str | None, dict[str, 
 
 
 @mcp.tool()
-async def get_item(framework_uuid: str, item: str) -> dict[str, Any]:
+async def get_item(framework_uuid: str, item: str, server: Optional[str] = None) -> dict[str, Any]:
     """Get one standard by identifier or human code (e.g. '1.F.P.2', 'IT-IDT-1'), with its full statement,
     breadcrumb of parents, direct children, and non-hierarchy associations (crosswalks, prerequisites).
 
     Args:
         framework_uuid: Framework identifier.
         item: Item identifier (UUID or URI) or humanCodingScheme code.
+        server: CASE server name from list_case_servers (default: georgia).
     """
     try:
-        idx = await _index(framework_uuid)
+        idx = await _index(framework_uuid, server)
     except CaseAPIError as exc:
         return _err(exc)
     iid, err = _resolve_one(idx, item)
@@ -240,6 +258,7 @@ async def get_children(
     item: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    server: Optional[str] = None,
 ) -> dict[str, Any]:
     """List the direct children of an item in teaching order (or the framework's top level if item is omitted).
 
@@ -247,9 +266,10 @@ async def get_children(
         framework_uuid: Framework identifier.
         item: Parent identifier or code. Omit for the top level.
         limit: Items per page (max 200). offset: Starting position.
+        server: CASE server name from list_case_servers (default: georgia).
     """
     try:
-        idx = await _index(framework_uuid)
+        idx = await _index(framework_uuid, server)
     except CaseAPIError as exc:
         return _err(exc)
     parent_id = None
@@ -268,15 +288,16 @@ async def get_children(
 
 
 @mcp.tool()
-async def get_ancestors(framework_uuid: str, item: str) -> dict[str, Any]:
+async def get_ancestors(framework_uuid: str, item: str, server: Optional[str] = None) -> dict[str, Any]:
     """Return the path from the framework's top level down to an item (domain → strand → standard …).
 
     Args:
         framework_uuid: Framework identifier.
         item: Item identifier or code.
+        server: CASE server name from list_case_servers (default: georgia).
     """
     try:
-        idx = await _index(framework_uuid)
+        idx = await _index(framework_uuid, server)
     except CaseAPIError as exc:
         return _err(exc)
     iid, err = _resolve_one(idx, item)
@@ -294,6 +315,7 @@ async def get_associations(
     framework_uuid: str,
     item: str,
     association_type: Optional[str] = None,
+    server: Optional[str] = None,
 ) -> dict[str, Any]:
     """List an item's CASE associations: isChildOf, exactMatchOf, isRelatedTo, precedes, isPartOf, etc.
 
@@ -301,9 +323,10 @@ async def get_associations(
         framework_uuid: Framework identifier.
         item: Item identifier or code.
         association_type: Optional filter, e.g. 'exactMatchOf' or 'isRelatedTo'.
+        server: CASE server name from list_case_servers (default: georgia).
     """
     try:
-        idx = await _index(framework_uuid)
+        idx = await _index(framework_uuid, server)
     except CaseAPIError as exc:
         return _err(exc)
     iid, err = _resolve_one(idx, item)
@@ -329,6 +352,7 @@ async def search_standards(
     item_type: Optional[str] = None,
     limit: int = 20,
     offset: int = 0,
+    server: Optional[str] = None,
 ) -> dict[str, Any]:
     """Search a framework's items by code or keywords, ranked by relevance.
 
@@ -341,11 +365,12 @@ async def search_standards(
         education_level: Optional grade, e.g. 'K', '3', '09'.
         item_type: Optional CFItemType, e.g. 'Standard', 'Course'.
         limit: Results per page (max 200). offset: Starting position.
+        server: CASE server name from list_case_servers (default: georgia).
     """
     if not query or not query.strip():
         return {"error": "query is required."}
     try:
-        idx = await _index(framework_uuid)
+        idx = await _index(framework_uuid, server)
     except CaseAPIError as exc:
         return _err(exc)
     ranked = idx.search(query, item_type, education_level)
@@ -368,6 +393,7 @@ async def get_courses_and_pathways(
     filter_type: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    server: Optional[str] = None,
 ) -> dict[str, Any]:
     """List courses, pathways and clusters in a framework, using each item's CFItemType.
 
@@ -378,9 +404,10 @@ async def get_courses_and_pathways(
         framework_uuid: Framework identifier.
         filter_type: Optional 'Course', 'Pathway' or 'Cluster'.
         limit: Results per page (max 200). offset: Starting position.
+        server: CASE server name from list_case_servers (default: georgia).
     """
     try:
-        idx = await _index(framework_uuid)
+        idx = await _index(framework_uuid, server)
     except CaseAPIError as exc:
         return _err(exc)
     want = (filter_type or "").strip().lower().rstrip("s")
@@ -417,6 +444,99 @@ async def get_courses_and_pathways(
             for i in page
         ],
     }
+
+
+# ── Servers & cross-server links ────────────────────────────────────────────
+
+
+@mcp.tool()
+async def list_case_servers() -> dict[str, Any]:
+    """List the CASE servers this tool can query (built-in Georgia servers plus any configured in GACASE_SERVERS).
+
+    Use a server's name as the `server` argument of the other tools.
+    """
+    try:
+        all_servers = servers()
+        default = get_server(None).name
+    except CaseAPIError as exc:
+        return _err(exc)
+    return {"default": default, "servers": [s.public() for s in all_servers.values()]}
+
+
+@mcp.tool()
+async def get_item_associations(item: str, server: Optional[str] = None) -> dict[str, Any]:
+    """Every association touching one item across all frameworks on a server (CASE getCFItemAssociations).
+
+    Useful on the Georgia CASE Council server ('georgiacase'), where cross-agency articulations
+    and crosswalks live in frameworks separate from the standards themselves.
+
+    Args:
+        item: Item identifier (UUID) or CASE item URI.
+        server: CASE server name from list_case_servers (default: georgia).
+    """
+    try:
+        srv = get_server(server)
+        data = await fetch_item_associations(item, srv.name)
+    except CaseAPIError as exc:
+        return _err(exc)
+    assocs = data.get("CFAssociations", []) or []
+    out = []
+    iid = (item or "").strip().rstrip("/").rsplit("/", 1)[-1]
+    for a in assocs:
+        o, d = a.get("originNodeURI") or {}, a.get("destinationNodeURI") or {}
+        oid = o.get("identifier") if isinstance(o, dict) else str(o).rsplit("/", 1)[-1]
+        other = d if oid == iid else o
+        out.append({
+            "association_type": a.get("associationType"),
+            "direction": "outgoing" if oid == iid else "incoming",
+            "other_title": other.get("title") if isinstance(other, dict) else None,
+            "other_identifier": other.get("identifier") if isinstance(other, dict) else None,
+            "other_uri": other.get("uri") if isinstance(other, dict) else other,
+            "framework_uri": (a.get("CFDocumentURI") or {}).get("uri") if isinstance(a.get("CFDocumentURI"), dict) else a.get("CFDocumentURI"),
+            "sequence_number": a.get("sequenceNumber"),
+        })
+    item_info = data.get("CFItem") or {}
+    return {
+        "server": srv.name,
+        "item": item_summary(item_info) if item_info else {"identifier": iid},
+        "total": len(out),
+        "associations": out[:200],
+        "next_steps": "Follow other_uri with resolve_case_uri to read the linked item, even on another configured server.",
+    }
+
+
+@mcp.tool()
+async def resolve_case_uri(uri: str) -> dict[str, Any]:
+    """Read any CASE URI (item, framework document or association) on a configured server.
+
+    Use this to follow a crosswalk or association link to another framework or another
+    state's server. Only hosts listed by list_case_servers are fetched.
+
+    Args:
+        uri: A CASE API URI, e.g. https://case.georgiastandards.org/ims/case/v1p1/CFItems/<id>.
+    """
+    try:
+        srv, data = await get_by_uri(uri)
+    except CaseAPIError as exc:
+        return _err(exc)
+    if isinstance(data, dict) and data.get("CFDocument"):
+        data = data["CFDocument"]
+    kind = "unknown"
+    if isinstance(data, dict):
+        if "fullStatement" in data:
+            kind = "CFItem"
+            body: Any = item_summary(data, full=True)
+        elif "adoptionStatus" in data or "CFPackageURI" in data:
+            kind = "CFDocument"
+            body = _doc_summary(data)
+        elif "associationType" in data:
+            kind = "CFAssociation"
+            body = data
+        else:
+            body = data
+    else:
+        body = data
+    return {"server": srv.name, "uri": uri, "type": kind, "result": body}
 
 
 if __name__ == "__main__":

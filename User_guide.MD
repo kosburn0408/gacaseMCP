@@ -5,6 +5,7 @@
 2. [Installation](#️-installation)
 3. [Running the server](#-running-the-server)
 4. [How to use the tools](#-how-to-use-the-tools)
+   - [Working with more than one CASE server](#working-with-more-than-one-case-server)
 5. [Tool reference](#️-tool-reference)
 6. [Configuration](#-configuration)
 7. [Troubleshooting](#-troubleshooting)
@@ -13,7 +14,7 @@
 
 ## ℹ️ Overview
 
-**gacaseMCP** connects AI assistants (Claude, Antigravity, Hermes or custom agents) to Georgia's SuitCASE repository, which publishes Georgia's frameworks in the 1EdTech CASE® 1.1 format. The frameworks include:
+**gacaseMCP** connects AI assistants (Claude, Antigravity, Hermes or custom agents) to 1EdTech CASE® 1.1 servers. By default that's Georgia's SuitCASE repository and the Georgia CASE Council shared server; others can be added. Georgia's frameworks include:
 - **Subject standards:** the current K–12 English Language Arts and Mathematics standards, Science, Social Studies, Computer Science, Fine Arts, World Languages, Health, PE, and the Georgia Early Learning and Development Standards.
 - **CTAE career clusters,** with courses and their content standards.
 - **Course codes and titles,** in GaDOE's `NN.NNNNN` format, e.g. `11.41500`, plus the State-Funded List of K–8 Subjects and 9–12 Courses.
@@ -85,6 +86,23 @@ Frameworks can hold thousands of items, so the tools are built to be used in ste
 
 Lists return `total`, `offset`, `limit` and `next_offset`; pass `offset=next_offset` for the next page.
 
+### Working with more than one CASE server
+
+Every tool takes an optional `server` argument (default `georgia`). Built-in servers:
+- **`georgia`**: Georgia SuitCASE (GaDOE), at `https://case.georgiastandards.org/ims/case/v1p1`.
+- **`georgiacase`**: the Georgia CASE Council shared server, at `https://georgiacase.org/ims/case/v1p1`. It holds cross-agency frameworks (GaDOE, TCSG, USG institutions), the High-Demand Career List and SOC reference data.
+
+Add others (another state, a district Satchel, Common Good Learning Tools' Rosetta) with `GACASE_SERVERS`:
+
+```bash
+export GACASE_SERVERS='{"rosetta": {"base_url": "https://<rosetta-api-host>/ims/case/v1p1", "token_env": "ROSETTA_TOKEN"}}'
+export ROSETTA_TOKEN=...
+```
+
+To follow a connection between agencies:
+1. `get_item_associations(item, server="georgiacase")` lists every association touching the item on that server, including articulations kept in separate frameworks.
+2. `resolve_case_uri(other_uri)` reads the linked item. It works on any configured server and refuses hosts that aren't configured.
+
 ---
 
 ## 🛠️ Tool reference
@@ -145,7 +163,16 @@ Lists items by type:
 
 **filter_type** is `Course`, `Pathway` or `Cluster`.
 
-All tools return `{"error": "..."}` with a readable message if the API can't be reached or an item isn't found.
+### `list_case_servers()`
+Lists the configured servers: name, base URL, description, and whether a token is set. Token values are never shown.
+
+### `get_item_associations(item, server=None)`
+Calls CASE `getCFItemAssociations` and returns every association that touches the item across all frameworks on that server. Each one has its type, direction, the other item's title, identifier and URI, and the framework that holds the association.
+
+### `resolve_case_uri(uri)`
+Reads a CASE item, framework document or association by its URI, from whichever configured server hosts it. It reports the `type` it found (`CFItem`, `CFDocument` or `CFAssociation`).
+
+All tools return `{"error": "..."}` with a readable message if a server can't be reached, refuses access (HTTP 401/403, which usually means a token is needed), or an item isn't found.
 
 ---
 
@@ -153,7 +180,9 @@ All tools return `{"error": "..."}` with a readable message if the API can't be 
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GACASE_BASE_URL` | `https://case.georgiastandards.org/ims/case/v1p1` | CASE 1.1 API base URL |
+| `GACASE_SERVERS` | *(none)* | JSON object adding or overriding servers: `{"name": {"base_url": "...", "description": "...", "token_env": "ENV_VAR"}}`. Base URLs must use https |
+| `GACASE_DEFAULT_SERVER` | `georgia` | Server used when a tool call doesn't name one |
+| `GACASE_BASE_URL` | `https://case.georgiastandards.org/ims/case/v1p1` | Overrides the `georgia` server's URL |
 | `GACASE_CACHE_TTL` | `86400` | Seconds to keep downloaded data in memory (`0` disables) |
 | `GACASE_TIMEOUT` | `60` | Request timeout (seconds) |
 
@@ -172,6 +201,12 @@ Check access to `https://case.georgiastandards.org`. The API is public and needs
 
 **A code returns "matches N items"**
 That code is used more than once in the framework. Pick the right item from `candidates` and pass its `identifier`.
+
+**"refused access (HTTP 401/403)"**
+The server needs a bearer token. Add `"token_env": "SOME_VAR"` to its `GACASE_SERVERS` entry and set that environment variable.
+
+**"is not a configured CASE server"**
+`resolve_case_uri` only reads hosts listed by `list_case_servers`. Add the host to `GACASE_SERVERS` to follow links there.
 
 **Results come from a retired framework**
 Check `adoption_status`. Use `get_framework_packages()` (which hides Deprecated frameworks) to find the current one.
