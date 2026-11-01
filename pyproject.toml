@@ -1,7 +1,7 @@
 [project]
 name = "gacaseMCP"
-version = "1.1.0"
-description = "MCP server for Georgia's SuitCASE (1EdTech CASE 1.1) standards API"
+version = "1.2.0"
+description = "MCP server for 1EdTech CASE 1.1 standards APIs (Georgia SuitCASE by default)"
 requires-python = ">=3.10"
 dependencies = [
     "mcp[cli]>=1.26,<2",
