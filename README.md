@@ -60,6 +60,28 @@ Antigravity CLI picks up `.agents/mcp_config.json` automatically.
 
 ---
 
+## 🌐 Run as a remote (HTTP) server
+
+By default the server speaks stdio to a local client. To host it for remote clients (Claude custom connectors, Microsoft Foundry or Copilot Studio agents, Teams, other agents on your network), run it over streamable HTTP:
+
+```bash
+GACASE_TRANSPORT=streamable-http GACASE_PORT=8000 gacasemcp   # after: pip install .
+# MCP endpoint:  http://HOST:8000/mcp        health check: http://HOST:8000/health
+```
+
+With Docker:
+
+```bash
+docker compose up -d --build        # serves on host port 8765 (override with GACASE_HOST_PORT)
+curl http://localhost:8765/health
+```
+
+Point a reverse proxy at the container and give clients `https://your-host/mcp`. HTTP mode runs stateless, so it works behind a proxy without session affinity.
+
+**Security:** the server has no authentication of its own. It only reads a public API, but if you expose it beyond a trusted network, put it behind your proxy's access controls and rate limiting, and set `GACASE_ALLOWED_HOSTS`.
+
+---
+
 ## ⚙️ Configuration
 
 | Variable | Default | Purpose |
@@ -67,6 +89,11 @@ Antigravity CLI picks up `.agents/mcp_config.json` automatically.
 | `GACASE_BASE_URL` | `https://case.georgiastandards.org/ims/case/v1p1` | CASE 1.1 API base URL |
 | `GACASE_CACHE_TTL` | `86400` | Seconds to keep downloaded frameworks in memory (`0` disables caching) |
 | `GACASE_TIMEOUT` | `60` | Request timeout in seconds |
+| `GACASE_TRANSPORT` | `stdio` | `stdio`, `streamable-http` or `sse` |
+| `GACASE_HOST` | `127.0.0.1` | Bind address for HTTP (`0.0.0.0` inside Docker) |
+| `GACASE_PORT` | `8000` | Port for HTTP |
+| `GACASE_ALLOWED_HOSTS` | *(unset)* | Comma-separated `Host` headers to accept over HTTP (e.g. `gacase.example.com,gacase.example.com:*`). Unset means any host is accepted |
+| `GACASE_ALLOWED_ORIGINS` | *(unset)* | Comma-separated browser origins to accept when `GACASE_ALLOWED_HOSTS` is set |
 
 Frameworks are downloaded once and cached, so walking the tree or searching repeatedly doesn't re-download multi-megabyte packages.
 

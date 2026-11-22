@@ -7,12 +7,17 @@ ancestors, associations) instead of reading everything at once.
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from gacaseMCP.client import CaseAPIError, base_url, get_documents, get_package
+from gacaseMCP import __version__
 from gacaseMCP.framework import FrameworkIndex, index_for, item_summary, normalize_level
 
 mcp = FastMCP("gacaseMCP")
@@ -419,5 +424,54 @@ async def get_courses_and_pathways(
     }
 
 
+# ── Running: stdio (default) or streamable HTTP ─────────────────────────────
+
+TRANSPORTS = ("stdio", "streamable-http", "sse")
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health(_request: Request) -> JSONResponse:
+    """Liveness probe for HTTP deployments (Docker healthcheck, reverse proxy)."""
+    return JSONResponse({"status": "ok", "service": "gacaseMCP", "version": __version__})
+
+
+def _csv(name: str) -> list[str]:
+    return [v.strip() for v in os.environ.get(name, "").split(",") if v.strip()]
+
+
+def configure_http() -> None:
+    """Apply GACASE_HOST / GACASE_PORT / GACASE_ALLOWED_HOSTS / GACASE_ALLOWED_ORIGINS to the server.
+
+    Must run before the HTTP app is built. The server is read-only, so it runs stateless: any
+    replica can answer any request and no session affinity is needed behind a proxy.
+    """
+    mcp.settings.host = os.environ.get("GACASE_HOST", "127.0.0.1")
+    mcp.settings.port = int(os.environ.get("GACASE_PORT", "8000"))
+    mcp.settings.stateless_http = True
+    mcp.settings.json_response = True
+
+    # FastMCP only trusts localhost Host headers by default, which would reject requests that arrive
+    # through a reverse proxy under a real hostname. Disable that check unless hosts are listed.
+    allowed_hosts = _csv("GACASE_ALLOWED_HOSTS")
+    if allowed_hosts:
+        mcp.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=allowed_hosts,
+            allowed_origins=_csv("GACASE_ALLOWED_ORIGINS"),
+        )
+    else:
+        mcp.settings.transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+
+def main() -> None:
+    """Entry point. GACASE_TRANSPORT selects stdio (default), streamable-http or sse."""
+    transport = os.environ.get("GACASE_TRANSPORT", "stdio").strip().lower()
+    if transport not in TRANSPORTS:
+        raise SystemExit(f"GACASE_TRANSPORT must be one of {', '.join(TRANSPORTS)} (got '{transport}')")
+    if transport != "stdio":
+        configure_http()
+    mcp.run(transport=transport)  # type: ignore[arg-type]
+
+
 if __name__ == "__main__":
-    mcp.run()
+    main()

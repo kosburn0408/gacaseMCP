@@ -156,6 +156,13 @@ All tools return `{"error": "..."}` with a readable message if the API can't be 
 | `GACASE_BASE_URL` | `https://case.georgiastandards.org/ims/case/v1p1` | CASE 1.1 API base URL |
 | `GACASE_CACHE_TTL` | `86400` | Seconds to keep downloaded data in memory (`0` disables) |
 | `GACASE_TIMEOUT` | `60` | Request timeout (seconds) |
+| `GACASE_TRANSPORT` | `stdio` | `stdio`, `streamable-http` or `sse` |
+| `GACASE_HOST` | `127.0.0.1` | Bind address for HTTP (`0.0.0.0` inside Docker) |
+| `GACASE_PORT` | `8000` | Port for HTTP |
+| `GACASE_ALLOWED_HOSTS` | *(unset)* | Comma-separated `Host` headers to accept over HTTP (e.g. `gacase.example.com,gacase.example.com:*`). Unset means any host is accepted |
+| `GACASE_ALLOWED_ORIGINS` | *(unset)* | Comma-separated browser origins to accept when `GACASE_ALLOWED_HOSTS` is set |
+
+See the README's *Run as a remote (HTTP) server* section for Docker and reverse-proxy setup.
 
 ---
 
