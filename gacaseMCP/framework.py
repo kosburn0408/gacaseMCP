@@ -9,21 +9,37 @@ from typing import Any
 _WORD_RE = re.compile(r"[a-z0-9]+")
 STATEMENT_PREVIEW = 300
 
-# Georgia uses KG/01..12; accept common spellings.
+# Georgia uses PK, KG, 01..12; accept common spellings.
 _LEVEL_ALIASES = {
-    "K": "KG", "KG": "KG", "KINDERGARTEN": "KG", "PK": "PK", "PREK": "PK", "PRE-K": "PK",
+    "K": "KG", "KG": "KG", "KINDERGARTEN": "KG",
+    "PK": "PK", "PREK": "PK", "PRE-K": "PK", "PRE K": "PK", "PREKINDERGARTEN": "PK", "PRE-KINDERGARTEN": "PK",
 }
+_NUMBER_WORDS = {
+    "ONE": 1, "FIRST": 1, "TWO": 2, "SECOND": 2, "THREE": 3, "THIRD": 3, "FOUR": 4, "FOURTH": 4,
+    "FIVE": 5, "FIFTH": 5, "SIX": 6, "SIXTH": 6, "SEVEN": 7, "SEVENTH": 7, "EIGHT": 8, "EIGHTH": 8,
+    "NINE": 9, "NINTH": 9, "TEN": 10, "TENTH": 10, "ELEVEN": 11, "ELEVENTH": 11, "TWELVE": 12, "TWELFTH": 12,
+}
+_GRADE_PREFIX_RE = re.compile(r"^(?:GRADES?|GR\.?)\s*")
+_ORDINAL_RE = re.compile(r"^(\d{1,2})(?:ST|ND|RD|TH)?$")
 
 
 def normalize_level(level: str | None) -> str | None:
+    """Normalize a grade to Georgia's coding: PK, KG, 01..12.
+
+    Accepts "K", "kindergarten", "3", "3rd", "Grade 3", "third", "09", "PreK". Unknown values are
+    returned upper-cased so they can still match items that use them verbatim.
+    """
     if level is None:
         return None
-    s = str(level).strip().upper().replace("TH", "").replace("ST", "").replace("ND", "").replace("RD", "")
-    s = s.replace("GRADE", "").strip()
+    s = re.sub(r"\s+", " ", str(level).strip().upper())
+    s = _GRADE_PREFIX_RE.sub("", s).strip()
     if s in _LEVEL_ALIASES:
         return _LEVEL_ALIASES[s]
-    if s.isdigit():
-        return f"{int(s):02d}"
+    if s in _NUMBER_WORDS:
+        return f"{_NUMBER_WORDS[s]:02d}"
+    m = _ORDINAL_RE.match(s)
+    if m:
+        return f"{int(m.group(1)):02d}"
     return s
 
 

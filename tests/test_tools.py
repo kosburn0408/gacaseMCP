@@ -110,3 +110,29 @@ async def test_deprecated_framework_warns() -> None:
 async def test_not_found_is_clean_error() -> None:
     r = await m.get_framework_by_id("missing")
     assert r["error"].startswith("Not found")
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("K", "KG"), ("kg", "KG"), ("Kindergarten", "KG"), ("grade K", "KG"),
+        ("PK", "PK"), ("PreK", "PK"), ("Pre-K", "PK"),
+        ("1", "01"), ("01", "01"), ("9", "09"), ("12", "12"),
+        ("3rd", "03"), ("12th", "12"), ("2nd", "02"), ("Grade 2", "02"), ("grades 3", "03"),
+        ("first", "01"), ("Second", "02"), ("third", "03"), ("Twelfth", "12"), ("six", "06"),
+        ("  4th ", "04"),
+        ("HS", "HS"),
+        (None, None),
+    ],
+)
+async def test_normalize_level(raw, expected) -> None:
+    from gacaseMCP.framework import normalize_level
+
+    assert normalize_level(raw) == expected
+
+
+async def test_spelled_out_grade_filters_items() -> None:
+    r = await m.search_standards(ELA, "decode", education_level="kindergarten")
+    assert [x["code"] for x in r["matches"]][0] == "K.F.P.2"
+    r2 = await m.get_framework_items(ELA, education_level="first")
+    assert {i["code"] for i in r2["items"]} == {"1.F", "1.F.P.2", "X.1"}
