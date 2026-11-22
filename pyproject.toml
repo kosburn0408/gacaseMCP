@@ -9,9 +9,15 @@ dependencies = [
     "pydantic>=2.0.0",
 ]
 
+[project.scripts]
+gacasemcp = "gacaseMCP.main:main"
+
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-asyncio>=0.23", "respx>=0.21"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.setuptools]
+packages = ["gacaseMCP"]

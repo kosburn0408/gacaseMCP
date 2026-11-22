@@ -1,0 +1,12 @@
+services:
+  gacasemcp:
+    build: .
+    image: gacasemcp:latest
+    restart: unless-stopped
+    ports:
+      # Host port 8765 avoids clashing with other containers; change with GACASE_HOST_PORT.
+      - "${GACASE_HOST_PORT:-8765}:8000"
+    environment:
+      # Optional: restrict which Host headers are accepted (comma-separated, ports allowed with :*).
+      # GACASE_ALLOWED_HOSTS: "gacase.example.com,gacase.example.com:*"
+      GACASE_CACHE_TTL: "86400"
